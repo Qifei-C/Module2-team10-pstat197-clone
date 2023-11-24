@@ -1,0 +1,174 @@
+---
+title: "Amber Script"
+author: "Amber Wang"
+date: "2023-11-15"
+output: html_document
+---
+
+```{r, message=FALSE, include=FALSE}
+library(tidyverse)
+library(tidymodels)
+library(keras)
+library(tensorflow)
+library(dplyr)
+library(tidytext)
+library(tokenizers)
+library(textstem)
+library(stopwords)
+library(modelr)
+library(Matrix)
+library(sparsesvd)
+library(glmnet)
+
+# library(tensorflow)
+# tf$constant('Hello world')
+
+url <- 'https://raw.githubusercontent.com/pstat197/pstat197a/main/materials/activities/data/'
+# load a few functions for the activity
+source(paste(url, 'projection-functions.R', sep = ''))
+root_dir <- rprojroot::find_rstudio_root_file()
+data_dir <- file.path(root_dir, "data")
+scripts_dir <- file.path(root_dir, "scripts")
+results_dir <- file.path(root_dir, "results")
+setwd(data_dir)
+load("claims-clean-example.RData")
+load("claims-raw.RData")
+```
+
+```{r}
+setwd(scripts_dir)
+source('preprocessing.R')
+
+# partition
+set.seed(102722)
+partitions <- claims_clean %>%
+  initial_split(prop = 0.8)
+
+train <- training(partitions)
+test <- testing(partitions)
+
+# make tf-idf matrix for bclass
+claims_tfidf_b <- nlp_fn(train)
+
+# make tf-idf matrix for mclass
+claims_tfidf_m <- train %>%
+  unnest_tokens(output = 'token', 
+                input = text_clean) %>%
+  group_by(.id, mclass) %>%
+  count(token) %>%
+  bind_tf_idf(term = token, 
+              document = .id, 
+              n = n) %>%
+  pivot_wider(id_cols = c(.id, mclass), 
+              names_from = token, 
+              values_from = tf_idf,
+              values_fill = 0) %>%
+  ungroup()
+```
+
+## For Binary
+```{r}
+# extract features
+train_text <- claims_tfidf_b %>%
+  select(-.id, -bclass)
+
+# extract labels and coerce to binary
+train_blables <- claims_tfidf_b %>% 
+  pull(bclass) %>%
+  factor() %>%
+  as.numeric() - 1
+```
+
+```{r}
+# create a preprocessing layer
+preprocess_layer <- layer_text_vectorization(
+  standardize = NULL,
+  split = 'whitespace',
+  ngrams = NULL,
+  max_tokens = NULL,
+  output_mode = 'tf_idf'
+)
+
+preprocess_layer %>% adapt(train_text)
+```
+
+```{r}
+# define NN architecture
+model <- keras_model_sequential() %>%
+  preprocess_layer() %>%
+  layer_dropout(0.2) %>%
+  layer_dense(units = 30, activation = 'ReLU') %>%
+  layer_dropout(0.2) %>%
+  layer_dense(units = 25) %>%
+  layer_dropout(0.2) %>%
+  layer_dense(1) %>%
+  layer_activation(activation = 'sigmoid') # change #layers and activation functions
+
+summary(model)
+```
+
+```{r}
+# configure for training
+model %>% compile(
+  loss = 'binary_crossentropy',
+  optimizer = 'adam',
+  metrics = 'binary_accuracy'
+)
+```
+
+```{r}
+# Fitting training set
+history <- model %>%
+  fit(train_text, 
+      train_labels,
+      validation_split = 0.2,
+      epochs = 5) # could change epochs
+
+evaluate(model, test_text, test_labels)
+
+## To add: CHECK TEST SET ACCURACY HERE
+# grab input
+x <- test %>%
+  pull(text_clean)
+
+# compute predictions
+preds <- predict(model, x) %>%
+  as.numeric()
+
+class_labels <- claims_raw %>% pull(bclass) %>% levels()
+
+pred_classes <- factor(preds > 0.5, labels = class_labels)
+
+# export (KEEP THIS FORMAT IDENTICAL)
+pred_df <- clean_df %>%
+  bind_cols(bclass.pred = pred_classes) %>%
+  select(.id, bclass.pred)
+
+# save the entire model as a SavedModel
+save_model_tf(model, "results/nn_model")
+
+```
+
+```{r}
+# Prediction
+
+```
+
+
+
+
+
+## For Multi-class Setting
+```{r}
+# extract features
+train_text <- claims_tfidf_m %>%
+  select(-.id, -mclass)
+
+# extract labels and coerce to binary
+train_mlables <- claims_tfidf_m %>% 
+  pull(mclass) %>%
+  factor() %>%
+  as.numeric() - 1
+```
+
+

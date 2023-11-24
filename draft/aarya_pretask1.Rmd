@@ -1,0 +1,182 @@
+---
+title: "Untitled"
+output: html_document
+date: "2023-11-14"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(tidytext)
+library(tokenizers)
+library(textstem)
+library(stopwords)
+library(tidyverse)
+library(tidymodels)
+library(modelr)
+library(Matrix)
+library(sparsesvd)
+library(glmnet)
+
+url <- 'https://raw.githubusercontent.com/pstat197/pstat197a/main/materials/activities/data/'
+
+# load a few functions for the activity
+source(paste(url, 'projection-functions.R', sep = ''))
+
+root_dir <- rprojroot::find_rstudio_root_file()
+data_dir <- file.path(root_dir, "data")
+scripts_dir <- file.path(root_dir, "scripts")
+results_dir <- file.path(root_dir, "results")
+
+setwd(data_dir)
+load("claims-clean-example.RData")
+load("claims-raw.RData")
+load("claims-clean-header.Rdata")
+```
+
+### Preliminary Task 1
+
+# Creating tf-idf matrices for header and no header cases
+
+```{r}
+setwd(scripts_dir)
+source('preprocessing.R')
+# tf-idf matrix for claims w/o headers
+claims_tfidf <- nlp_fn(claims_clean)
+
+# tf-idf matrix for claims w/ headers
+claims_header_tfidf <- nlp_fn(claims_clean_header)
+```
+
+# Split data into train/test for both `claims_clean` and `claims_clean_header`
+
+```{r}
+# partition data
+set.seed(110122)
+partitions <- claims_tfidf %>% initial_split(prop = 0.7)
+partitions_header <- claims_header_tfidf %>% initial_split(prop = 0.7)
+
+# train/test split w/o headers
+train <- training(partitions) %>%
+  select(-.id, -bclass)
+train_labels <- training(partitions) %>%
+  select(.id, bclass)
+
+test <- testing(partitions) %>%
+  select(-.id, -bclass)
+test_labels <- testing(partitions) %>%
+  select(.id, bclass)
+
+# train/test split w/ headers
+train_header <- training(partitions_header) %>%
+  select(-.id, -bclass)
+train_header_labels <- training(partitions_header) %>%
+  select(.id, bclass)
+
+test_header <- testing(partitions_header) %>%
+  select(-.id, -bclass)
+test_header_labels <- testing(partitions_header) %>%
+  select(.id, bclass)
+```
+
+# Find projections of non-header/header data
+
+```{r}
+### w/o headers
+# find projections based on training data
+proj_out <- projection_fn(.dtm = train, .prop = 0.7)
+train_projected <- proj_out$data
+
+### w/ headers
+# find projections based on training data
+proj_out_header <- projection_fn(.dtm = train_header, .prop = 0.7)
+train_projected_header <- proj_out_header$data
+```
+
+# Fit logistic regression models 
+
+```{r}
+### w/o headers
+train_claim <- train_labels %>%
+  transmute(bclass = factor(bclass)) %>%
+  bind_cols(train_projected)
+
+fit_claim <- glm(bclass ~ ., data = train_claim, family = "binomial") # warning: evidence of overfitting
+
+### w/ headers
+train_claim_header <- train_header_labels %>%
+  transmute(bclass = factor(bclass)) %>%
+  bind_cols(train_projected_header)
+
+fit_claim_header <- glm(bclass ~ ., data = train_claim_header, family = "binomial") # warning: evidence of overfitting
+```
+
+# Prediction
+
+```{r}
+### w/o headers
+# project test data onto PCs
+test_projected <- reproject_fn(.dtm = test, proj_out)
+
+# coerce to matrix
+x_test <- as.matrix(test_projected)
+
+# compute predicted probabilities
+preds <- predict(fit_claim, 
+                 test_projected,
+                 type = 'response')
+
+### w/ headers
+# project test data onto PCs
+test_projected_header <- reproject_fn(.dtm = test_header, proj_out_header)
+
+# coerce to matrix
+x_test_header <- as.matrix(test_projected_header)
+
+# compute predicted probabilities
+preds_header <- predict(fit_claim_header, 
+                 test_projected_header,
+                 type = 'response')
+
+```
+
+# Performance, w/o headers
+
+```{r}
+# store predictions in a data frame with true labels
+pred_df <- test_labels %>%
+  transmute(bclass = factor(bclass)) %>%
+  bind_cols(pred = as.numeric(preds)) %>%
+  mutate(bclass.pred = factor(pred > 0.5, 
+                              labels = levels(bclass)))
+
+# define classification metric panel 
+panel <- metric_set(sensitivity, 
+                    specificity, 
+                    accuracy, 
+                    roc_auc)
+
+# compute test set accuracy
+pred_df %>% panel(truth = bclass, 
+                  estimate = bclass.pred, 
+                  pred, 
+                  event_level = 'second')
+```
+
+# Performance, w/ headers
+
+```{r}
+# store predictions in a data frame with true labels
+pred_header_df <- test_header_labels %>%
+  transmute(bclass = factor(bclass)) %>%
+  bind_cols(pred = as.numeric(preds_header)) %>%
+  mutate(bclass.pred = factor(pred > 0.5, 
+                              labels = levels(bclass)))
+
+# compute test set accuracy
+pred_header_df %>% panel(truth = bclass, 
+                  estimate = bclass.pred, 
+                  pred, 
+                  event_level = 'second')
+```
+

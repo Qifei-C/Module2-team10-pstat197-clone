@@ -1,0 +1,389 @@
+---
+title: "Summary of Preliminary Tasks"
+author: 'Jen and Aarya'
+date: today
+---
+
+```{r, message=FALSE, include=FALSE}
+library(tidyverse)
+library(tidymodels)
+library(keras)
+library(tensorflow)
+library(dplyr)
+library(tidytext)
+library(tokenizers)
+library(textstem)
+library(stopwords)
+library(modelr)
+library(Matrix)
+library(sparsesvd)
+library(glmnet)
+
+url <- 'https://raw.githubusercontent.com/pstat197/pstat197a/main/materials/activities/data/'
+# load a few functions for the activity
+source(paste(url, 'projection-functions.R', sep = ''))
+root_dir <- rprojroot::find_rstudio_root_file()
+data_dir <- file.path(root_dir, "data")
+scripts_dir <- file.path(root_dir, "scripts")
+results_dir <- file.path(root_dir, "results")
+setwd(data_dir)
+load("claims-clean-example.RData")
+load("claims-raw.RData")
+load("claims-clean-header.Rdata")
+```
+
+
+### HTML scraping
+
+Does including header content improve predictions? Answer the question and provide quantitative evidence supporting your answer.
+
+We fit a principal component logistic regression classification model on two sets of website scraping data- one that included website headers and one that did not. Utilizing tf-idf matrices to get quantitative frequency metrics for each token, we were able to reduce dimensionality of each dataset by running principal component analysis and using the components that explained 70% of the variation in each dataset. After splitting performing a train/test split and fitting a standard logistic regression model to each of the datasets, we were able to get performance metrics of the two models on test data, projected onto the same principal components as the training data. 
+
+Model performance,
+  - Without headers: The logistic regression model fit to the data without headers achieved an roc_auc value of 0.852
+  - With headers: The logistic regression model fit to the data with headers achieved an roc_auc value of 0.746
+
+In all, including header content does not improve predictions, using roc_auc as the metric for separability, as the model fit on data with headers achieved a lower roc_auc, accuracy, and sensitivity score. 
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+# Creating tf-idf matrices for header and no header cases
+
+setwd(scripts_dir)
+source('preprocessing.R')
+# tf-idf matrix for claims w/o headers
+claims_tfidf <- nlp_fn(claims_clean)
+
+# tf-idf matrix for claims w/ headers
+claims_header_tfidf <- nlp_fn(claims_clean_header)
+```
+
+```{r, echo = FALSE, message=FALSE}
+# Split data into train/test for both `claims_clean` and `claims_clean_header`
+
+# partition data
+set.seed(110122)
+partitions <- claims_tfidf %>% initial_split(prop = 0.7)
+partitions_header <- claims_header_tfidf %>% initial_split(prop = 0.7)
+
+# train/test split w/o headers
+train <- training(partitions) %>%
+  select(-.id, -bclass)
+train_labels <- training(partitions) %>%
+  select(.id, bclass)
+
+test <- testing(partitions) %>%
+  select(-.id, -bclass)
+test_labels <- testing(partitions) %>%
+  select(.id, bclass)
+
+# train/test split w/ headers
+train_header <- training(partitions_header) %>%
+  select(-.id, -bclass)
+train_header_labels <- training(partitions_header) %>%
+  select(.id, bclass)
+
+test_header <- testing(partitions_header) %>%
+  select(-.id, -bclass)
+test_header_labels <- testing(partitions_header) %>%
+  select(.id, bclass)
+```
+
+
+```{r, echo = FALSE, message=FALSE}
+# Find projections of non-header/header data
+
+### w/o headers
+# find projections based on training data
+proj_out <- projection_fn(.dtm = train, .prop = 0.7)
+train_projected <- proj_out$data
+
+### w/ headers
+# find projections based on training data
+proj_out_header <- projection_fn(.dtm = train_header, .prop = 0.7)
+train_projected_header <- proj_out_header$data
+```
+
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+# Fit logistic regression models 
+
+### w/o headers
+train_claim <- train_labels %>%
+  transmute(bclass = factor(bclass)) %>%
+  bind_cols(train_projected)
+
+fit_claim <- glm(bclass ~ ., data = train_claim, family = "binomial") # warning: evidence of overfitting
+
+### w/ headers
+train_claim_header <- train_header_labels %>%
+  transmute(bclass = factor(bclass)) %>%
+  bind_cols(train_projected_header)
+
+fit_claim_header <- glm(bclass ~ ., data = train_claim_header, family = "binomial") # warning: evidence of overfitting
+```
+
+
+```{r, echo = FALSE, message=FALSE}
+# Prediction
+
+### w/o headers
+# project test data onto PCs
+test_projected <- reproject_fn(.dtm = test, proj_out)
+
+# coerce to matrix
+x_test <- as.matrix(test_projected)
+
+# compute predicted probabilities
+preds <- predict(fit_claim, 
+                 test_projected,
+                 type = 'response')
+
+### w/ headers
+# project test data onto PCs
+test_projected_header <- reproject_fn(.dtm = test_header, proj_out_header)
+
+# coerce to matrix
+x_test_header <- as.matrix(test_projected_header)
+
+# compute predicted probabilities
+preds_header <- predict(fit_claim_header, 
+                 test_projected_header,
+                 type = 'response')
+
+```
+
+Model performance without headers:
+
+```{r, echo = FALSE, message=FALSE}
+# Performance, w/o headers
+
+# store predictions in a data frame with true labels
+pred_df <- test_labels %>%
+  transmute(bclass = factor(bclass)) %>%
+  bind_cols(pred = as.numeric(preds)) %>%
+  mutate(bclass.pred = factor(pred > 0.5, 
+                              labels = levels(bclass)))
+
+# define classification metric panel 
+panel <- metric_set(sensitivity, 
+                    specificity, 
+                    accuracy, 
+                    roc_auc)
+
+# compute test set accuracy
+pred_df %>% panel(truth = bclass, 
+                  estimate = bclass.pred, 
+                  pred, 
+                  event_level = 'second')
+```
+
+Model performance with headers:
+
+```{r, echo = FALSE, message=FALSE}
+# Performance, w/ headers
+
+# store predictions in a data frame with true labels
+pred_header_df <- test_header_labels %>%
+  transmute(bclass = factor(bclass)) %>%
+  bind_cols(pred = as.numeric(preds_header)) %>%
+  mutate(bclass.pred = factor(pred > 0.5, 
+                              labels = levels(bclass)))
+
+# compute test set accuracy
+pred_header_df %>% panel(truth = bclass, 
+                  estimate = bclass.pred, 
+                  pred, 
+                  event_level = 'second')
+```
+
+
+### Bigrams
+
+Bigram tokenization of the text data does not seem to capture additional information relevant to the classification of interest. We achieved an roc_auc value of 0.643 using a model fitted to the bigram-tokenized data as compared to 0.852 from task 1's model with word tokenized data. We suspect this is the case because bigram-tokenization creates more possible combinations of tokens than word-tokenized data, meaning their frequency across all documents is lower, and therefore single-word tokenized data can better classify the documents.  
+
+
+```{r, echo = FALSE, message=FALSE}
+# Creating tf-idf matrix for bigram tokenized data
+
+setwd(scripts_dir)
+source('preprocessing.R')
+claims_bigram_tfidf <- bigram_fn1(claims_clean)
+```
+
+
+```{r, echo = FALSE, message=FALSE}
+# Split data into train/test for bigram data
+
+# partition data
+set.seed(110122)
+partitions <- claims_bigram_tfidf %>% initial_split(prop = 0.7)
+
+# train/test split bigram
+train_bigram <- training(partitions) %>%
+  select(-.id, -bclass)
+train_bigram_labels <- training(partitions) %>%
+  select(.id, bclass)
+
+test_bigram <- testing(partitions) %>%
+  select(-.id, -bclass)
+test_bigram_labels <- testing(partitions) %>%
+  select(.id, bclass)
+```
+
+
+```{r, echo = FALSE, message=FALSE}
+# find projections based on training data
+proj_out_bigram <- projection_fn(.dtm = train_bigram, .prop = 0.7)
+train_projected_bigram <- proj_out_bigram$data
+```
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+# Fit logistic regression models 
+
+train_claim_bigram <- train_bigram_labels %>%
+  transmute(bclass = factor(bclass)) %>%
+  bind_cols(train_projected_bigram)
+
+fit_claim_bigram <- glm(bclass ~ ., data = train_claim_bigram, family = "binomial") # warning: evidence of overfitting
+```
+
+
+```{r, echo = FALSE, message=FALSE}
+# Prediction
+
+# project test data onto PCs
+test_projected_bigram <- reproject_fn(.dtm = test_bigram, proj_out_bigram)
+
+# coerce to matrix
+#x_test <- as.matrix(test_projected)
+
+# compute predicted probabilities
+preds_bigram <- predict(fit_claim_bigram, 
+                 test_projected_bigram,
+                 type = 'response')
+```
+
+Model performance using bigram tokenization:
+
+```{r, echo = FALSE}
+# Performance
+
+# store predictions in a data frame with true labels
+pred_df_bigram <- test_bigram_labels %>%
+  transmute(bclass = factor(bclass)) %>%
+  bind_cols(pred = as.numeric(preds_bigram)) %>%
+  mutate(bclass.pred = factor(pred > 0.5, 
+                              labels = levels(bclass)))
+
+# define classification metric panel 
+panel <- metric_set(sensitivity, 
+                    specificity, 
+                    accuracy, 
+                    roc_auc)
+
+# compute test set accuracy
+pred_df_bigram %>% panel(truth = bclass, 
+                  estimate = bclass.pred, 
+                  pred, 
+                  event_level = 'second')
+```
+
+### Neural net
+
+We trained a single-layer neural network model that has a 20 unit hidden layer and a sigmoid activation function.
+In order to quantify the optimization and loss of our model, we used validation sets to provide a soft estimate of accuracy during training. Our validation sets used 20% of the training data for validation.
+
+We initially used 50 epochs to train but noticed that around 5 epochs, the validation accuracy stopped increasing. Therefore, in order to avoid overfitting, we used 20 epochs instead.
+
+```{r, echo=FALSE, message=FALSE}
+set.seed(102722)
+partitions <- claims_clean %>%
+  mutate(text_clean = str_trim(text_clean)) %>%
+  filter(str_length(text_clean) > 5) %>%
+  initial_split(prop = 0.7)
+
+test_dtm<-testing(partitions)%>%
+  unnest_tokens(output = 'token', 
+                input = text_clean) %>%
+  group_by(.id, bclass) %>%
+  count(token) %>%
+  bind_tf_idf(term = token, 
+              document = .id, 
+              n = n) %>%
+  pivot_wider(id_cols = c(.id, bclass), 
+              names_from = token, 
+              values_from = tf_idf,
+              values_fill = 0) %>%
+  ungroup()
+
+train_dtm <- training(partitions) %>%
+  unnest_tokens(output = 'token', 
+                input = text_clean) %>%
+  group_by(.id, bclass) %>%
+  count(token) %>%
+  bind_tf_idf(term = token, 
+              document = .id, 
+              n = n) %>%
+  pivot_wider(id_cols = c(.id, bclass), 
+              names_from = token, 
+              values_from = tf_idf,
+              values_fill = 0) %>%
+  ungroup()
+
+
+# store full DTM as a matrix
+x_train <- train_dtm %>%
+  select(-bclass, -.id) %>%
+  as.matrix()
+
+# extract labels and coerce to binary
+y_train <- train_dtm %>% 
+  pull(bclass) %>%
+  factor() %>%
+  as.numeric() - 1
+
+# store full DTM as a matrix, testing
+x_test <- test_dtm %>%
+  select(-bclass, -.id) %>%
+  as.matrix()
+
+# extract labels for testing data
+y_test <- test_dtm %>% 
+  pull(bclass) %>%
+  factor() %>%
+  as.numeric() - 1
+```
+
+```{r, echo=FALSE}
+model <- keras_model_sequential(input_shape = ncol(x_train)) %>%
+  layer_dense(20, activation = 'relu') %>%
+  layer_dense(1) %>%
+  layer_activation(activation = 'sigmoid')
+
+summary(model)
+```
+```{r, message=FALSE, echo=FALSE, include=FALSE}
+# Adam optimization is a stochastic gradient descent method that is based on adaptive estimation of first-order and second-order moments.
+model %>%
+  compile(
+    loss = 'binary_crossentropy',
+    optimizer = "adam",
+    metrics = c('binary_accuracy', 'AUC')
+  )
+
+history <- model %>%
+  fit(x = x_train,
+      y = y_train,
+      epochs = 20,
+      validation_split = 0.2)
+```
+
+
+```{r}
+plot(history)
+```
+
+From the plots above, we see that our neural network model achieves a validation AUC value of about 0.86 which is about an equivalent performance as our logistic regression function in task 1. 
+We also see that our predictive training accuracy gets extremely high, but the validation accuracy plateaus around 79% which suggests that our model is suffering from overfitting. 
+
+Finally, when the accuracy is high and the loss is low, which is the case for our neural network, our mode makes small errors on just some of the data, which is ideal.

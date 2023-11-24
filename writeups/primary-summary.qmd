@@ -1,0 +1,36 @@
+---
+title: "Summary of Primary Tasks"
+author: 'Shuai'
+date: today
+---
+
+```{r, message=FALSE, include=FALSE}
+library(tidyverse)
+library(tidymodels)
+library(keras)
+library(tensorflow)
+library(dplyr)
+library(tidytext)
+library(tokenizers)
+library(textstem)
+library(stopwords)
+library(modelr)
+library(Matrix)
+library(sparsesvd)
+library(glmnet)
+
+url <- 'https://raw.githubusercontent.com/pstat197/pstat197a/main/materials/activities/data/'
+# load a few functions for the activity
+source(paste(url, 'projection-functions.R', sep = ''))
+root_dir <- rprojroot::find_rstudio_root_file()
+data_dir <- file.path(root_dir, "data")
+scripts_dir <- file.path(root_dir, "scripts")
+results_dir <- file.path(root_dir, "results")
+setwd(data_dir)
+load("claims-clean-example.RData")
+load("claims-raw.RData")
+load("claims-clean-header.Rdata")
+```
+
+
+### 

@@ -1,0 +1,61 @@
+---
+title: "Predictive modeling of claims status"
+author: 'Shuai'
+date: today
+---
+
+```{r, message=FALSE, include=FALSE}
+library(tidyverse)
+library(tidymodels)
+library(keras)
+library(tensorflow)
+library(dplyr)
+library(tidytext)
+library(tokenizers)
+library(textstem)
+library(stopwords)
+library(modelr)
+library(Matrix)
+library(sparsesvd)
+library(glmnet)
+
+url <- 'https://raw.githubusercontent.com/pstat197/pstat197a/main/materials/activities/data/'
+# load a few functions for the activity
+source(paste(url, 'projection-functions.R', sep = ''))
+root_dir <- rprojroot::find_rstudio_root_file()
+data_dir <- file.path(root_dir, "data")
+scripts_dir <- file.path(root_dir, "scripts")
+results_dir <- file.path(root_dir, "results")
+setwd(data_dir)
+load("claims-clean-example.RData")
+load("claims-raw.RData")
+load("claims-clean-header.Rdata")
+```
+
+### Abstract
+
+> Header and paragraph content was scraped from the raw webpages and processed into term frequencies of word tokens. We constructed in total four models including principal component logistic regression, single layer neuro network, a recurrent neuro network using LSTM, and support vector machine. LSTM gives us XXX accuracy on binary and XXX on multipal classification. The SVM, on the other hand achieves  XXX accuracy on binary and XXX on multipal classification.
+
+### Preprocessing
+
+> Our dataset includes different websites that are labeled with different levels of fraud. All the text was extracted from HTML. We have two version with and without headers, the prior one includes the words in all headers from the HTML. All punctuation and symbols are removed from the proceed data. From then on, the text will be tokenized, splitted by whitespace. This means each word will become a token and the number of appearance will be counted and stored. Total amount of words included are more than 38000. The preprocessing method provides a quantitative value to be used as inputs for neuro networks. The input for our models are the words used in that website and their counts.
+
+
+### Methods
+
+> We tested Long Short-Term Memory (LSTM) as the recurrent neuro network method and support vector machine (SVM). We used one layer of LSTM with 16 units. In our NLP model, LSTM are used after an embedding layer to process these vectors sequentially, capturing the semantic relationships in the text. However, LSTM's performance...
+
+> The SVM method is adopted due to its ability to handle high-dimensional data efficiently. We used a 5-fold cross validation for training and achieved  XXX efficient in binary classification.
+
+> Compare with the single layer neuro network model and the principle component logistic regression model we used before, the best model is: AB
+
+```{r}
+print('put model details here')
+```
+
+
+### Results
+
+Indicate the predictive accuracy of the binary classifications and the multiclass classifications. Provide a table for each, and report sensitivity, specificity, and accuracy.[^1]
+
+[^1]: Read [this article](https://yardstick.tidymodels.org/articles/multiclass.html) on multiclass averaging.

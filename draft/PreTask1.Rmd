@@ -1,0 +1,210 @@
+---
+title: "RawAnalysis"
+author: "Qifei"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# Load necessary libraries
+rm(list = ls())
+library(tidyverse)
+library(dplyr)
+library(readr)
+library(tm)
+library(caret)
+library(ggplot2)
+```
+
+```{r}
+root_dir <- rprojroot::find_rstudio_root_file()
+data_dir <- file.path(root_dir, "data")
+scripts_dir <- file.path(root_dir, "scripts")
+results_dir <- file.path(root_dir, "results")
+setwd(data_dir)
+# Load the data
+load("claims-clean-example.RData")
+load("claims-raw.RData")
+```
+
+```{r}
+# Look at the first few rows of the data
+head(claims_clean)
+summary(claims_clean)
+```
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+library(keras)
+library(tensorflow)
+
+setwd(scripts_dir)
+source('preprocessing.R')
+# preprocess (will take a minute or two)
+
+# the following code is to generate dataset with headers
+# claims_clean_header <- claims_raw %>%
+#   parse_data()
+# setwd(data_dir)
+# save(claims_clean_header, file = 'claims-clean-header.RData')
+
+setwd(data_dir)
+load("claims-clean-header.Rdata")
+
+set.seed(110122)
+partitions <- claims_clean %>%
+  initial_split(prop = 0.8)
+
+partitions_header <- claims_clean_header %>%
+  initial_split(prop = 0.8)
+
+train_text <- training(partitions) %>%
+  pull(text_clean)
+train_labels <- training(partitions) %>%
+  pull(bclass) %>%
+  as.numeric() - 1
+
+train_text_header <- training(partitions_header) %>%
+  pull(text_clean)
+train_labels_header <- training(partitions_header) %>%
+  pull(bclass) %>%
+  as.numeric() - 1
+```
+
+```{r}
+# create a preprocessing layer
+preprocess_layer <- layer_text_vectorization(
+  standardize = NULL,
+  split = 'whitespace',
+  ngrams = NULL,
+  max_tokens = NULL,
+  output_mode = 'tf_idf'
+)
+
+preprocess_layer %>% adapt(train_text)
+
+# define NN architecture
+model <- keras_model_sequential() %>%
+  preprocess_layer() %>%
+  layer_dropout(0.2) %>%
+  layer_dense(units = 50) %>%
+  layer_dropout(0.3) %>%
+  layer_dense(1) %>%
+  layer_activation(activation = 'sigmoid')
+
+summary(model)
+
+# configure for training
+model %>% compile(
+  loss = 'binary_crossentropy',
+  optimizer = 'adam',
+  metrics = 'binary_accuracy'
+)
+
+# train
+history <- model %>%
+  fit(train_text, 
+      train_labels,
+      validation_split = 0.3,
+      epochs = 20)
+
+## CHECK TEST SET ACCURACY HERE
+
+# save the entire model as a SavedModel
+setwd(results_dir)
+save_model_tf(model, "example-model")
+```
+
+
+```{r}
+# the following model using dataset with headers as training set
+preprocess_layer <- layer_text_vectorization(
+  standardize = NULL,
+  split = 'whitespace',
+  ngrams = NULL,
+  max_tokens = NULL,
+  output_mode = 'tf_idf'
+)
+
+preprocess_layer %>% adapt(train_text_header)
+
+# define NN architecture
+model <- keras_model_sequential() %>%
+  preprocess_layer() %>%
+  layer_dropout(0.2) %>%
+  layer_dense(units = 50) %>%
+  layer_dropout(0.3) %>%
+  layer_dense(1) %>%
+  layer_activation(activation = 'sigmoid')
+
+summary(model)
+
+# configure for training
+model %>% compile(
+  loss = 'binary_crossentropy',
+  optimizer = 'adam',
+  metrics = 'binary_accuracy'
+)
+
+# train
+history_header <- model %>%
+  fit(train_text_header, 
+      train_labels_header,
+      validation_split = 0.3,
+      epochs = 20)
+
+## CHECK TEST SET ACCURACY HERE
+```
+
+```{r}
+# save the entire model as a SavedModel
+setwd(results_dir)
+save_model_tf(model, "example-advanced-model")
+```
+
+```{r}
+# Convert the keras_training_history objects to data frames
+history_df <- as.data.frame(history)
+history_header_df <- as.data.frame(history_header)
+
+# Add a source column to distinguish between the two datasets
+history_df$source <- 'Model 1'
+history_header_df$source <- 'Model 2'
+
+# Combine the data
+combined_history <- rbind(history_df, history_header_df)
+```
+
+```{r}
+# Split data by metric
+loss_data <- filter(combined_history, metric == "loss")
+accuracy_data <- filter(combined_history, metric == "binary_accuracy")
+
+# Plot for loss - Training
+ggplot(filter(loss_data, data == "training"), aes(x = epoch, y = value, color = source)) +
+  geom_line() +
+  labs(title = "Loss Over Epochs (Training)", x = "Epoch", y = "Loss", color = "Source") +
+  theme_minimal()
+
+# Plot for loss - Validation
+ggplot(filter(loss_data, data == "validation"), aes(x = epoch, y = value, color = source)) +
+  geom_line() +
+  labs(title = "Loss Over Epochs (Validation)", x = "Epoch", y = "Loss", color = "Source") +
+  theme_minimal()
+
+# Plot for binary accuracy - Training
+ggplot(filter(accuracy_data, data == "training"), aes(x = epoch, y = value, color = source)) +
+  geom_line() +
+  labs(title = "Binary Accuracy Over Epochs (Training)", x = "Epoch", y = "Binary Accuracy", color = "Source") +
+  theme_minimal()
+
+# Plot for binary accuracy - Validation
+ggplot(filter(accuracy_data, data == "validation"), aes(x = epoch, y = value, color = source)) +
+  geom_line() +
+  labs(title = "Binary Accuracy Over Epochs (Validation)", x = "Epoch", y = "Binary Accuracy", color = "Source") +
+  theme_minimal()
+
+```
+

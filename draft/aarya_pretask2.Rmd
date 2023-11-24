@@ -1,0 +1,163 @@
+---
+title: "Untitled"
+output: html_document
+date: "2023-11-14"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(tidytext)
+library(tokenizers)
+library(textstem)
+library(stopwords)
+library(tidyverse)
+library(tidymodels)
+library(modelr)
+library(Matrix)
+library(sparsesvd)
+library(glmnet)
+
+url <- 'https://raw.githubusercontent.com/pstat197/pstat197a/main/materials/activities/data/'
+
+# load a few functions for the activity
+source(paste(url, 'projection-functions.R', sep = ''))
+
+root_dir <- rprojroot::find_rstudio_root_file()
+data_dir <- file.path(root_dir, "data")
+scripts_dir <- file.path(root_dir, "scripts")
+results_dir <- file.path(root_dir, "results")
+
+setwd(data_dir)
+load("claims-clean-example.RData")
+load("claims-raw.RData")
+load("claims-clean-header.Rdata")
+```
+
+### Preliminary Task 2
+
+- We saw in preliminary task 1 that the principal component logistic regression worked best with data that didn't include header information
+- Accordingly, we will continue analysis with data that doesn't include header information
+
+- In this preliminary task, we will compare the principal component logistic regression on word tokenized data to a principal component logistic regression on bigram tokenized data that includes the log-odds-ratios from the first regression as well as principal components of the bigram tokenized tf-idf matrix as inputs
+- The goal is to see if incorporating multiple levels of granularity into the principal component logistic regression model captures more information about the claim status of a page
+
+# Revisiting preliminary task 1, logistic regression with word tokenized data (no headers)
+
+- getting `log_odds_ratio` from the principal logistic regression model from preliminary task 1
+
+```{r}
+log_odds_ratio <- exp(summary(fit_claim)$coef[,1])
+log_odds_ratio
+
+
+# Rotate, if dimensions dont match remove intercept
+
+pivotted_logodds<-as.data.frame(log_odds_ratio)
+dim(pivotted_logodds)
+
+
+# cbind to pca (choose first couple bigram pca because its usually in order of significance)
+
+```
+
+# Creating tf-idf matrix for bigram tokenized data
+
+```{r}
+setwd(scripts_dir)
+source('preprocessing.R')
+claims_bigram_tfidf <- bigram_fn1(claims_clean)
+```
+
+
+
+```{r}
+claims_bigram_tfidf
+```
+
+# Split data into train/test for both `claims_clean` and `claims_clean_header`
+
+```{r}
+# partition data
+set.seed(110122)
+partitions <- claims_bigram_tfidf %>% initial_split(prop = 0.7)
+
+# train/test split bigram
+train_bigram <- training(partitions) %>%
+  select(-.id, -bclass)
+train_bigram_labels <- training(partitions) %>%
+  select(.id, bclass)
+
+test_bigram <- testing(partitions) %>%
+  select(-.id, -bclass)
+test_bigram_labels <- testing(partitions) %>%
+  select(.id, bclass)
+```
+
+# Find projections of bigram data
+
+```{r}
+# find projections based on training data
+proj_out_bigram <- projection_fn(.dtm = train_bigram, .prop = 0.7)
+train_projected_bigram <- proj_out_bigram$data
+```
+
+# Fit logistic regression models 
+
+```{r}
+train_claim_bigram <- train_bigram_labels %>%
+  transmute(bclass = factor(bclass)) %>%
+  bind_cols(train_projected_bigram)
+
+fit_claim_bigram <- glm(bclass ~ ., data = train_claim_bigram, family = "binomial") # warning: evidence of overfitting
+```
+
+
+```{r}
+bigram_pcas<-as.data.frame(train_claim_bigram)
+# Combine Log-Odds and Bigrams
+
+pivotted_logodds
+
+```
+
+
+
+
+# Prediction
+
+```{r}
+# project test data onto PCs
+test_projected_bigram <- reproject_fn(.dtm = test_bigram, proj_out_bigram)
+
+# coerce to matrix
+#x_test <- as.matrix(test_projected)
+
+# compute predicted probabilities
+preds_bigram <- predict(fit_claim_bigram, 
+                 test_projected_bigram,
+                 type = 'response')
+```
+
+# Performance
+
+```{r}
+# store predictions in a data frame with true labels
+pred_df_bigram <- test_bigram_labels %>%
+  transmute(bclass = factor(bclass)) %>%
+  bind_cols(pred = as.numeric(preds_bigram)) %>%
+  mutate(bclass.pred = factor(pred > 0.5, 
+                              labels = levels(bclass)))
+
+# define classification metric panel 
+panel <- metric_set(sensitivity, 
+                    specificity, 
+                    accuracy, 
+                    roc_auc)
+
+# compute test set accuracy
+pred_df_bigram %>% panel(truth = bclass, 
+                  estimate = bclass.pred, 
+                  pred, 
+                  event_level = 'second')
+```

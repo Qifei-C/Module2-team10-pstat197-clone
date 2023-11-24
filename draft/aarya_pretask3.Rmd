@@ -1,0 +1,99 @@
+---
+title: "Untitled"
+output: html_document
+date: "2023-11-17"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(keras)
+library(tensorflow)
+library(reticulate)
+path_to_python <- "/Users/aarya_kulkarni/opt/anaconda3/bin/python3"
+virtualenv_create("r-reticulate", python = path_to_python)
+install_tensorflow(envname = "r-reticulate")
+install_keras(envname = "r-reticulate")
+use_virtualenv("r-reticulate")
+```
+
+```{r}
+root_dir <- rprojroot::find_rstudio_root_file()
+data_dir <- file.path(root_dir, "data")
+scripts_dir <- file.path(root_dir, "scripts")
+results_dir <- file.path(root_dir, "results")
+
+setwd(data_dir)
+load("claims-clean-example.RData")
+load("claims-raw.RData")
+load("claims-clean-header.Rdata")
+```
+
+# Partioning data
+
+```{r}
+# partition
+set.seed(102722)
+partitions <- claims_clean %>%
+  mutate(text_clean = str_trim(text_clean)) %>%
+  filter(str_length(text_clean) > 5) %>%
+  initial_split(prop = 0.7)
+```
+
+# Creating tf_idf matrix on training data
+
+```{r}
+train_dtm <- nlp_fn(training(partitions)) 
+```
+
+# Storing training data w/o labels
+
+```{r}
+x_train <- train_dtm %>%
+  select(-bclass, -.id) %>%
+  as.matrix()
+```
+
+# extract labels and coerce to binary
+
+```{r}
+y_train <- train_dtm %>%
+  pull(bclass) %>%
+  factor() %>%
+  as.numeric() - 1
+```
+
+# Creating keras NN
+
+```{r}
+model <- keras_model_sequential(input_shape = ncol(x_train)) %>%
+  layer_dense(10) %>%
+  layer_dense(1) %>%
+  layer_activation(activation = 'sigmoid')
+
+summary(model)
+```
+
+
+
+
+
+
+
+# Adam optimization is a stochastic gradient descent method that is based on adaptive estimation of first-order and second-order moments.
+model %>%
+  compile(
+    loss = 'binary_crossentropy',
+    optimizer = "adam",
+    metrics = 'binary_accuracy'
+  )
+
+history <- model %>%
+  fit(x = x_train,
+      y = y_train,
+      epochs = 50)
+
+plot(history)
+
+```
+
+
